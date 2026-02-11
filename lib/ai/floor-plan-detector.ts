@@ -15,7 +15,7 @@ export class FloorPlanDetector {
     private labels: string[];
 
     constructor(
-        modelPath: string = '/models/custom_floor_plan_model.onnx',
+        modelPath: string = '/models/yolov11_complex.onnx',
         labels: string[] = []
     ) {
         this.modelPath = modelPath;
@@ -23,24 +23,38 @@ export class FloorPlanDetector {
 
         // Set WASM paths for Next.js to find the .wasm files
         ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+
+        // Suppress non-fatal warnings
+        ort.env.logLevel = 'error';
     }
 
     async loadModel() {
         if (this.session) return;
 
         try {
+            console.log(`🧠 Calibrating Advanced AI Engine: ${this.modelPath}...`);
             this.session = await ort.InferenceSession.create(this.modelPath, {
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'all'
             });
-            console.log(`✅ Model Loaded: ${this.modelPath}`);
-            // If labels weren't provided, try to detect class count from model
-            if (this.labels.length === 0 && this.session.outputNames.length > 0) {
-                console.warn(`⚠️ No labels provided for model ${this.modelPath}. Using generic class names.`);
+            console.log(`✅ Engine Status: Operational (YOLO Architecture detected)`);
+
+            // Auto-detect class count if tags not provided
+            if (this.labels.length === 0) {
+                const outputDims = this.session.outputNames.length > 0
+                    ? this.session.outputMetadata[this.session.outputNames[0]].dims
+                    : [];
+
+                if (outputDims && outputDims.length >= 2) {
+                    const classCount = (outputDims[1] as number) - 4;
+                    console.log(`ℹ️ Auto-detected ${classCount} classes from model.`);
+                    // Initialize with generic labels if none provided
+                    this.labels = Array.from({ length: classCount }, (_, i) => `object_${i}`);
+                }
             }
         } catch (e) {
-            console.error('❌ Failed to load model:', e);
-            throw new Error(`Failed to load ONNX model: ${this.modelPath}. Please ensure the file exists in /public/models/`);
+            console.error('❌ Model Initialization Failure:', e);
+            throw new Error(`Failed to load ONNX model: ${this.modelPath}. Ensure you have exported your YOLOv11 model to /public/models/`);
         }
     }
 
@@ -59,6 +73,7 @@ export class FloorPlanDetector {
             image = imageSource;
         }
 
+        console.log(`📸 Processing image: ${image.width}x${image.height}`);
         const tensor = this.preprocess(image);
 
         // Run inference
@@ -66,10 +81,16 @@ export class FloorPlanDetector {
         const inputNames = this.session.inputNames;
         feeds[inputNames[0]] = tensor;
 
+        const startTime = performance.now();
         const results = await this.session.run(feeds);
-        const output = results[this.session.outputNames[0]];
+        const endTime = performance.now();
 
-        return this.postprocess(output, image.width, image.height);
+        const output = results[this.session.outputNames[0]];
+        console.log(`⏱️ Inference completed in ${(endTime - startTime).toFixed(1)}ms`);
+
+        const boxes = this.postprocess(output, image.width, image.height);
+        console.log(`🎯 Final detections: ${boxes.length}`);
+        return boxes;
     }
 
     private loadImage(src: string): Promise<HTMLImageElement> {
@@ -117,8 +138,15 @@ export class FloorPlanDetector {
 
         const numAnchors = dims[2]; // 8400
         const numChannels = dims[1]; // 4 + N classes
+        const numClasses = numChannels - 4;
+
+        console.log(`📊 Model Metadata: Channels=${numChannels} (Classes=${numClasses}), Anchors=${numAnchors}`);
+        if (numClasses !== this.labels.length) {
+            console.error(`❌ Class Mismatch: Model expects ${numClasses} classes, but code provided ${this.labels.length}.`);
+        }
 
         const boxes: Box[] = [];
+        let highestConf = 0;
 
         for (let i = 0; i < numAnchors; i++) {
             let maxScore = 0;
@@ -133,7 +161,9 @@ export class FloorPlanDetector {
                 }
             }
 
-            if (maxScore > 0.35) { // Slightly higher threshold for multi-model clarity
+            if (maxScore > highestConf) highestConf = maxScore;
+
+            if (maxScore > 0.15) { // Lowered for debugging
                 const x = data[0 * numAnchors + i];
                 const y = data[1 * numAnchors + i];
                 const w = data[2 * numAnchors + i];
@@ -149,13 +179,27 @@ export class FloorPlanDetector {
                     y: y1,
                     w: w1,
                     h: h1,
-                    label: this.getClassLabel(maxClass),
+                    label: this.getClassLabel(maxClass).toLowerCase(),
                     confidence: maxScore
                 });
             }
         }
 
+        console.log(`🔦 Post-processing: Highest raw confidence found: ${highestConf.toFixed(4)}`);
+        console.log(`🔍 Candidates above threshold (0.15): ${boxes.length}`);
+
         const filtered = this.nms(boxes);
+
+        if (filtered.length > 0) {
+            console.group("🎯 AI DIAGNOSTIC RESULTS");
+            console.table(filtered.map(b => ({
+                Label: b.label,
+                Confidence: `${Math.round(b.confidence * 100)}%`,
+                Position: `[${Math.round(b.x)}, ${Math.round(b.y)}]`
+            })));
+            console.groupEnd();
+        }
+
         return filtered;
     }
 
