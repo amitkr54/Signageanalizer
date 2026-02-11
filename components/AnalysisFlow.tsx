@@ -9,6 +9,10 @@ import { calculateSignage, AnalysisResult } from '@/lib/fire-safety/calculator';
 import { generatePDFReport, generateTextReport } from '@/lib/report-generator';
 import { FloorPlanViewer } from './FloorPlanViewer';
 import { identifyRoomTypes } from '@/lib/ai/room-processor';
+import { OCRRecognizer } from '@/lib/ai/ocr-recognizer';
+
+const ocr = new OCRRecognizer();
+
 
 export function AnalysisFlow() {
     const [step, setStep] = useState<'upload' | 'preview' | 'analyzing' | 'results'>('upload');
@@ -21,7 +25,7 @@ export function AnalysisFlow() {
     const MODELS = {
         '/models/omega_model.onnx': [
             'wall', 'door', 'window', 'stairs', 'exit_sign', 'fire_extinguisher',
-            'fire_alarm', 'emergency_exit', 'fire_hose_reel', 'fire_hydrant', 'aed'
+            'fire_alarm', 'emergency_exit', 'fire_hose_reel', 'fire_hydrant', 'aed', 'text'
         ],
         '/models/floorplan.onnx': [
             'Column', 'Curtain Wall', 'Dimension', 'Door', 'Railing', 'Stairs', 'Toilet', 'Wall', 'Window'
@@ -56,10 +60,38 @@ export function AnalysisFlow() {
             }
 
             for (const imageSrc of images) {
+                const img = await new Promise<HTMLImageElement>((resolve) => {
+                    const i = new Image();
+                    i.src = imageSrc;
+                    i.onload = () => resolve(i);
+                });
+
                 for (const detector of detectors) {
-                    const detections = await detector.detect(imageSrc);
+                    const detections = await detector.detect(img);
                     allDetections.push(...detections);
+
+                    // HYBRID OCR: Process 'text' boxes immediately in browser
+                    const textBoxes = detections.filter(d => d.label === 'text' || d.label === 'text_block');
+                    if (textBoxes.length > 0) {
+                        console.log(`🔡 Processing ${textBoxes.length} text crops in browser...`);
+                        for (const box of textBoxes) {
+                            const crop = extractCrop(img, box);
+                            const text = await ocr.recognize(crop);
+                            if (text) allTexts.push(text);
+                        }
+                    }
                 }
+            }
+
+            function extractCrop(img: HTMLImageElement, box: any): HTMLCanvasElement {
+                const canvas = document.createElement('canvas');
+                canvas.width = box.w;
+                canvas.height = box.h;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    ctx.drawImage(img, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+                }
+                return canvas;
             }
 
             // 2. ADVANCED PADDLEOCR-LITE (Server Side)

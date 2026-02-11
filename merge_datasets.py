@@ -15,6 +15,7 @@ import yaml
 # Fire safety dataset paths
 VR_AI_PATH = "C:/Users/Admin/Downloads/VR_AI.v1-for-floorplan.yolov8"
 SAFETY_PATH = "C:/Users/Admin/Downloads/safety.v1-for-floorplan.yolov8"
+TEXT_DATASET_PATH = "C:/Users/Admin/Downloads/floorplan_text.v1.yolov8" # UPDATE THIS with your text dataset
 
 # Output merged dataset path
 OUTPUT_DIR = "C:/Users/Admin/Downloads/fire_safety_merged"
@@ -38,7 +39,11 @@ def merge_fire_safety_datasets():
     all_classes = set()
     
     # Merge both datasets
-    for dataset_name, dataset_path in [("vr_ai", VR_AI_PATH), ("safety", SAFETY_PATH)]:
+    for dataset_name, dataset_path in [
+        ("vr_ai", VR_AI_PATH), 
+        ("safety", SAFETY_PATH),
+        ("text", TEXT_DATASET_PATH) # Added for hybrid OCR
+    ]:
         print(f"\n📦 Processing {dataset_name}...")
         
         if not os.path.exists(dataset_path):
@@ -97,12 +102,9 @@ def create_data_yaml(output_path, class_ids):
     
     # Fire safety class names (adjust based on your datasets)
     class_names = [
-        'exit_sign',
-        'fire_extinguisher', 
-        'fire_alarm',
-        'emergency_button',
-        'fire_hose',
-        'emergency_exit'
+        'wall', 'door', 'window', 'stairs', 'exit_sign', 
+        'fire_extinguisher', 'fire_alarm', 'emergency_exit', 
+        'fire_hose_reel', 'fire_hydrant', 'aed', 'text'
     ]
     
     yaml_content = f"""# Fire Safety Merged Dataset
